@@ -1,11 +1,43 @@
-import childProcess from 'node:child_process';
+import { exec, type ExecOptions } from 'node:child_process';
 import chalk from 'chalk';
-
-import { PortInfo, ProcessInfo } from '@/Common/Port';
+import { PortInfo, ProcessInfo } from '@/common/Enum';
+import { nativeImage, app, NativeImage } from 'electron';
 
 const platform = process.platform;
 
-function getWinPortByURL(ip: string): number {
+export function execPromise(
+  command: string,
+  options: {
+    encoding: 'buffer' | null;
+  } & ExecOptions,
+): Promise<{ stdout: Buffer; stderr: Buffer }> {
+  return new Promise<{ stdout: Buffer; stderr: Buffer }>((resolve, reject) => {
+    exec(command, options, (error, stdout, stderr) => {
+      if (error) {
+        reject(error);
+        return;
+      }
+      resolve({ stdout, stderr });
+    });
+  });
+}
+/* win */
+
+function decodeStdoutGBK_WIN(stdout: Buffer) {
+  const decoder = new TextDecoder('GBK');
+  return decoder.decode(stdout);
+}
+
+function extractFilePath_WIN(output: string) {
+  const regex = /ExecutablePath=([^\r\n]+)/;
+  const match = regex.exec(output);
+  if (match && match[1]) {
+    return match[1];
+  }
+  return null;
+}
+
+function getPortByURL_WIN(ip: string): number {
   /* win下使用 nerstat -ano的IP有三种形式: 127.0.0.1:123 是本地回环地址只能在本机进行通信；[::]:123 [::1]:1212 是IPv6通配地址，可以接受来自任何IPv6地址的连接；0.0.0.0:123 是IPv4通配地址 */
   const urlObjectList = ip.match(/:(\d+)$/);
   if (!urlObjectList) return -1;
@@ -13,20 +45,14 @@ function getWinPortByURL(ip: string): number {
   return isNaN(port) ? -1 : port;
 }
 
-function decodeWinStdoutGBK(stdout: Buffer) {
-  const decoder = new TextDecoder('GBK');
-  return decoder.decode(stdout);
-}
-
-function getProgramNameByPID(pid: string): Promise<ProcessInfo> {
+function getProcessNameByPID_WIN(pid: string): Promise<ProcessInfo> {
   if (!pid) return Promise.reject('pid 无效');
   return new Promise<ProcessInfo>((resolve, reject) => {
     const command = `tasklist /FI "pId eq ${pid}"`;
-    childProcess.exec(command, { encoding: 'buffer' }, (error, stdout) => {
-      if (error) {
-        reject(error);
-      } else {
-        const processInfoList = decodeWinStdoutGBK(stdout)
+    execPromise(command, { encoding: 'buffer' })
+      .then((res) => {
+        const { stdout } = res;
+        const processInfoList = decodeStdoutGBK_WIN(stdout)
           ?.split('\n')[3]
           ?.split(/\s+/);
         if (processInfoList) {
@@ -41,10 +67,26 @@ function getProgramNameByPID(pid: string): Promise<ProcessInfo> {
           };
           resolve(processInfo);
         } else {
-          reject(`processInfoList不存在,${decodeWinStdoutGBK(stdout)}`);
+          reject(`processInfoList不存在,${decodeStdoutGBK_WIN(stdout)}`);
         }
-      }
-    });
+      })
+      .catch((error) => {
+        reject(error);
+      });
+  });
+}
+
+function getProcessFilePathByPID_WIN(pid: string): Promise<string | null> {
+  const command = `wmic process where processid=${pid} get ExecutablePath /value`;
+  return new Promise((resolve, reject) => {
+    execPromise(command, { encoding: 'buffer' })
+      .then(({ stdout }) => {
+        const output = decodeStdoutGBK_WIN(stdout);
+        resolve(extractFilePath_WIN(output));
+      })
+      .catch((error) => {
+        reject(error);
+      });
   });
 }
 
@@ -52,18 +94,11 @@ export function getSystemPortUsage(
   port?: number | Array<number>,
 ): Promise<Array<ProcessInfo & PortInfo>> {
   const command = 'netstat -ano';
-  return new Promise<Array<ProcessInfo & PortInfo>>((resolve, rejects) => {
-    childProcess.exec(
-      command,
-      { encoding: 'buffer' },
-      async (error, stdout) => {
-        if (error) {
-          rejects(
-            new Error(chalk.whiteBright.bgRed.bold('get port fail' + error)),
-          );
-        }
+  return new Promise<Array<ProcessInfo & PortInfo>>((resolve, reject) => {
+    execPromise(command, { encoding: 'buffer' })
+      .then(async ({ stdout }) => {
         const portList: Array<PortInfo> = [];
-        const lineList = decodeWinStdoutGBK(stdout)?.split('\r\n');
+        const lineList = decodeStdoutGBK_WIN(stdout)?.split('\r\n');
         for (let i = 4; i < lineList.length; i++) {
           const portLine = lineList[i].trim();
           if (portLine) {
@@ -76,9 +111,9 @@ export function getSystemPortUsage(
             const portInfo: PortInfo = {
               protocol,
               localIp,
-              localPort: getWinPortByURL(localIp),
+              localPort: getPortByURL_WIN(localIp),
               externalIp,
-              externalPort: getWinPortByURL(externalIp),
+              externalPort: getPortByURL_WIN(externalIp),
               status,
               pId,
             };
@@ -113,21 +148,55 @@ export function getSystemPortUsage(
         // 异步获取每个端口对应的程序名称
         const promiseList = showPortList.map(async (portInfo) => {
           try {
-            const processInfo = await getProgramNameByPID(portInfo.pId);
-            portInfo = Object.assign(portInfo, processInfo);
-          } catch (err) {
-            console.log(`获取PID${portInfo.pId}进程信息失败,${err}`);
+            const processInfo = await getProcessNameByPID_WIN(portInfo.pId);
+            const filePath = await getProcessFilePathByPID_WIN(portInfo.pId);
+            console.log(filePath, 'filePath');
+
+            const icon = await app.getFileIcon(filePath || '', {
+              size: 'small',
+            });
+            portInfo = Object.assign(portInfo, processInfo, {
+              filePath,
+              icon: icon.toDataURL(),
+            });
+          } catch (error) {
+            console.log(`获取PID${portInfo.pId}进程信息失败,${error}`);
           }
         });
         await Promise.allSettled(promiseList);
-        console.log(port, 'port.ts port');
-        console.log(showPortList, 'port.ts showPortList');
-
         resolve(showPortList);
-      },
-    );
+      })
+      .catch((error) =>
+        reject(
+          new Error(chalk.whiteBright.bgRed.bold('get port fail' + error)),
+        ),
+      );
   });
 }
+
+export function getSystemPortUsage_PowerShell(
+  port?: number | Array<number>,
+): Promise<Array<>>;
 // (async function main() {
-//   const list = await getSystemPortUsage(3306);
+//   const list = await getSystemPortUsage([5, 6, 7, 8]);
 // })();
+/* 
+Get-NetTCPConnection |
+    Where-Object {$_.OwningProcess -ne $null} |
+    Group-Object OwningProcess |
+    ForEach-Object {
+        $process = Get-Process -Id $_.Name -ErrorAction SilentlyContinue
+        if ($process) {
+            $ports = $_.Group.LocalPort -join ','
+            [PSCustomObject]@{
+                PID = $_.Name
+                ProcessName = $process.Name
+                Path = $process.Path
+                Status = $process.Status
+                CpuUsage = $process.CPU
+                MemoryUsage = $process.WorkingSet
+                Ports = $ports
+            }
+        }
+    }
+*/

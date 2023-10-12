@@ -25,7 +25,7 @@ const electronHandler = {
     async data(channel: DataTypeEnum, ...args: any[]) {
       try {
         if (DataTypeEnum.SEARCH_PORT) {
-          return await ipcRenderer.invoke(DataTypeEnum.SEARCH_PORT, args);
+          return await ipcRenderer.invoke(DataTypeEnum.SEARCH_PORT, ...args);
         }
       } catch (error) {
         console.log('preload fail' + error);

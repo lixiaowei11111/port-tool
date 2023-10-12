@@ -15,8 +15,6 @@ import log from 'electron-log';
 import MenuBuilder from './menu';
 import { resolveHtmlPath } from './util';
 import { getSystemPortUsage } from './port';
-
-import { type PortInfo, type ProcessInfo } from '@/Common/Port';
 class AppUpdater {
   constructor() {
     log.transports.file.level = 'info';
@@ -29,7 +27,6 @@ let mainWindow: BrowserWindow | null = null;
 
 ipcMain.on('ipc-example', async (event, arg) => {
   const msgTemplate = (pingPong: string) => `IPC test: ${pingPong}`;
-  console.log(msgTemplate(arg));
   event.reply('ipc-example', msgTemplate('pong'));
 });
 
@@ -140,6 +137,7 @@ app
       'data:search_port',
       async (event, port?: number | Array<number>) => {
         try {
+          console.log(port, 'port');
           return await getSystemPortUsage(port);
         } catch (error) {
           console.log(error, 'data:search_port fail' + error);
