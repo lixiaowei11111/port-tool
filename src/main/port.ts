@@ -1,9 +1,7 @@
-import { exec, type ExecOptions } from 'node:child_process';
 import chalk from 'chalk';
-import { PortInfo, ProcessInfo } from '@/common/Enum';
-import { nativeImage, app, NativeImage } from 'electron';
-
-const platform = process.platform;
+import { PortInfo, ProcessInfo, ProcessDetailInfo } from '@/constant/Enum';
+import { app } from 'electron';
+import { exec, type ExecOptions } from 'child_process';
 
 export function execPromise(
   command: string,
@@ -12,11 +10,12 @@ export function execPromise(
   } & ExecOptions,
 ): Promise<{ stdout: Buffer; stderr: Buffer }> {
   return new Promise<{ stdout: Buffer; stderr: Buffer }>((resolve, reject) => {
-    exec(command, options, (error, stdout, stderr) => {
-      if (error) {
-        reject(error);
+    exec(command, options, (err, stdout, stderr) => {
+      if (err) {
+        reject(err);
         return;
       }
+      console.log(stdout, 'stdout');
       resolve({ stdout, stderr });
     });
   });
@@ -176,27 +175,69 @@ export function getSystemPortUsage(
 
 export function getSystemPortUsage_PowerShell(
   port?: number | Array<number>,
-): Promise<Array<>>;
-// (async function main() {
-//   const list = await getSystemPortUsage([5, 6, 7, 8]);
-// })();
-/* 
-Get-NetTCPConnection |
-    Where-Object {$_.OwningProcess -ne $null} |
-    Group-Object OwningProcess |
-    ForEach-Object {
-        $process = Get-Process -Id $_.Name -ErrorAction SilentlyContinue
-        if ($process) {
-            $ports = $_.Group.LocalPort -join ','
-            [PSCustomObject]@{
-                PID = $_.Name
-                ProcessName = $process.Name
-                Path = $process.Path
-                Status = $process.Status
-                CpuUsage = $process.CPU
-                MemoryUsage = $process.WorkingSet
-                Ports = $ports
-            }
+): Promise<ProcessDetailInfo[]> {
+  let command = `
+  Get-NetTCPConnection |
+  Where-Object {\$_.OwningProcess -ne \$null} |
+  Group-Object OwningProcess |
+  ForEach-Object {
+      \$process = Get-Process -Id \$_.Name -ErrorAction SilentlyContinue
+      if ([bool]\$process) {
+        \$ports = \$_.Group.LocalPort -join ','
+        [PSCustomObject]@{
+            pId = \$_.Name
+            processName = \$process.Name
+            filePath = \$process.Path
+            status = \$process.Status
+            cpuUsage = \$process.CPU
+            memoryUsage = \$process.WorkingSet
+            ports = \$ports -or @()
         }
-    }
-*/
+      }
+  } | Format-List
+`;
+  if (typeof port === 'number') {
+    // 查询包含指定端口
+    command += ` | Where-Object {\$_.Ports -match ".*${port}.*"}`;
+  } else if (Array.isArray(port) && port.length > 0) {
+    // 查询包含多个端口
+    const portFilter = port
+      .map((p) => `\$_.Ports -match ".*${p}.*"`)
+      .join(' -or ');
+    command += ` | Where-Object {${portFilter}}`;
+  }
+  return new Promise<ProcessDetailInfo[]>((resolve, reject) => {
+    execPromise(`powershell -command "${command}"`, {
+      encoding: 'buffer',
+      shell: 'powershell',
+    })
+      .then(({ stdout }) => {
+        const processInfoList = decodeStdoutGBK_WIN(stdout as Buffer)
+          .trim()
+          .split('\n')
+          .map((line) => {
+            const lines = line.split('\n');
+            const processInfo: ProcessDetailInfo = {
+              pId: lines[0].trim().split(': ')[1],
+              processName: lines[1].trim().split(': ')[1],
+              filePath: lines[2].trim().split(': ')[1],
+              status: lines[3].trim().split(': ')[1],
+              cpuUsage: parseFloat(lines[4].trim().split(': ')[1]),
+              memoryUsage: parseInt(lines[5].trim().split(': ')[1]),
+              ports: lines[6]
+                .trim()
+                .split(': ')[1]
+                .split(',')
+                .map((port) => parseInt(port.trim())),
+            };
+            return processInfo;
+          });
+
+        resolve(processInfoList);
+      })
+      .catch((err) => reject(err));
+  });
+}
+// (async function main() {
+//   const list = await getSystemPortUsage_PowerShell([5, 6, 7, 8]);
+// })();

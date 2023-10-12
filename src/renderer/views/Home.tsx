@@ -1,7 +1,7 @@
 import { type FC, useEffect, useState } from 'react';
-import { type ProcessInfo, type PortInfo } from '@/common/Enum';
+import { type ProcessInfo, type PortInfo } from '@/constant/Enum';
 // TYPE
-import { DataTypeEnum } from '@/common/Enum';
+import { DataTypeEnum } from '@/constant/Enum';
 const Home: FC = () => {
   const [port, setPort] = useState<number>(0);
   const [portInfo, setPortInfo] = useState<ProcessInfo & PortInfo>();

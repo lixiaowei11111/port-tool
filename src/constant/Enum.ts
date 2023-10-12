@@ -24,8 +24,12 @@ export type ProcessInfo = {
 };
 
 export type ProcessDetailInfo = {
-  pId: number; //
-  port: number; //
-  programName?: string;
+  pId: string|number; //
+  ports: number[]; //
+  processName?: string;
   filePath?: string;
+  status?: string;
+  cpuUsage?: string | number;
+  memoryUsage?: string | number;
+  icon?: string;
 };
